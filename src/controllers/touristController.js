@@ -223,6 +223,16 @@ exports.registerTourist = async (req, res) => {
       auditHash,
       status: log.status,
     });
+    const { Queue } = require("bullmq");
+const connection = { host: "127.0.0.1", port: 6379 };
+const blockchainQueue = new Queue("blockchainQueue", { connection });
+
+// enqueue blockchain job
+await blockchainQueue.add("anchor", {
+  blockchainLogId: log.id,
+  auditHash
+});
+
 
   } catch (err) {
     console.error('registerTourist ERR:', err);

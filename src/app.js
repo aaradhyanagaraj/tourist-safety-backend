@@ -31,5 +31,7 @@ app.use((err, req, res, next) => {
     error: err.message || 'Internal Server Error'
   });
 });
+const statusRoutes = require("./routes/status");
+app.use("/api/tourists", statusRoutes);
 
 module.exports = app;
