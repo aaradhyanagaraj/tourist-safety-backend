@@ -7,22 +7,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Tourist {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
-  createdAt DateTime @default(now())
+enum TouristType {
+  INDIAN
+  FOREIGN
 }
 
-model ForeignTourist {
-  id           Int      @id @default(autoincrement())
-  name         String
-  passportNo   String   @unique
-  nationality  String
-  visaType     String
-  visaNumber   String
-  travelStart  DateTime
-  travelEnd    DateTime
-  consent      Boolean
-  createdAt    DateTime @default(now())
+model Tourist {
+  id              Int              @id @default(autoincrement())
+  aadhaarHash     String           @unique
+  encryptedPayload String
+  payloadNonce     String
+  payloadTag       String
+  wrappedDek       String
+  wrappedDekNonce  String
+  wrappedDekTag    String
+  travelFrom       DateTime
+  travelTo         DateTime
+  consent          Boolean
+  type             String           @default("INDIAN")   // <--- add default
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  blockchainLogs   BlockchainLog[]
+}
+
+
+model BlockchainLog {
+  id         Int      @id @default(autoincrement())
+  tourist    Tourist  @relation(fields: [touristId], references: [id])
+  touristId  Int
+  auditHash  String   // SHA-256 hex string
+  status     String   // e.g., "PENDING", "CONFIRMED", "ANCHOR_FAILED"
+  createdAt  DateTime @default(now())
+}
+
+model OtpVerification {
+  id            Int      @id @default(autoincrement())
+  phoneHash     String   @unique
+  otp           String
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
 }

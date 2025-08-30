@@ -7,7 +7,7 @@ const morgan = require('morgan');
 const healthRouter = require('./routes/health');
 
 const app = express();
-
+const touristRoutes = require('./routes/touristRoutes');
 /* ----------- Middlewares ----------- */
 app.use(helmet());        // adds security headers (helps protect from attacks)
 app.use(cors());          // allows requests from frontend (React Native, etc.)
@@ -15,7 +15,9 @@ app.use(express.json());  // parses JSON request bodies into req.body
 app.use(morgan('dev'));   // logs HTTP requests in console (method, status, time)
 
 /* ----------- Routes ----------- */
-app.use('/api/health', healthRouter);
+
+app.use("/api/tourists", touristRoutes);
+
 
 /* ----------- 404 Handler ----------- */
 app.use((req, res) => {
