@@ -32,4 +32,10 @@ app.use((err, req, res, next) => {
   });
 });
 
+const { connectRedis } = require("./utils/redis");
+
+(async () => {
+  await connectRedis();
+})();
+
 module.exports = app;
