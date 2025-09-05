@@ -13,38 +13,65 @@ enum TouristType {
 }
 
 model Tourist {
-  id              Int              @id @default(autoincrement())
-  aadhaarHash     String           @unique
-  encryptedPayload String
-  payloadNonce     String
-  payloadTag       String
-  wrappedDek       String
-  wrappedDekNonce  String
-  wrappedDekTag    String
-  travelFrom       DateTime
-  travelTo         DateTime
-  consent          Boolean
-  type             String           @default("INDIAN")   // <--- add default
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  id                Int       @id @default(autoincrement())
+  touristId         String    @unique
+  type              String    // "INDIAN" | "FOREIGNER"
+  aadhaarHash       String?   // For INDIAN tourists
+  visaIdHash        String?   // For FOREIGN tourists
 
-  blockchainLogs   BlockchainLog[]
+  // Mobile stored encrypted
+  mobile            String
+  mobileNonce       String
+  mobileTag         String
+
+  // Encrypted full payload
+  encryptedPayload  String
+  payloadNonce      String
+  payloadTag        String
+
+  // Wrapped Data Encryption Key (DEK)
+  wrappedDek        String
+  wrappedDekNonce   String
+  wrappedDekTag     String
+
+  // Trip details stored explicitly for queries
+  name              String
+  age               Int
+  gender            String
+  address           String
+  emergencyContact  String
+  travelStart       DateTime
+  travelEnd         DateTime
+  consent           Boolean   @default(false)
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  locations         Location[]
 }
 
 
-model BlockchainLog {
-  id         Int      @id @default(autoincrement())
-  tourist    Tourist  @relation(fields: [touristId], references: [id])
-  touristId  Int
-  auditHash  String   // SHA-256 hex string
-  status     String   // e.g., "PENDING", "CONFIRMED", "ANCHOR_FAILED"
-  createdAt  DateTime @default(now())
-}
 
 model OtpVerification {
-  id            Int      @id @default(autoincrement())
-  phoneHash     String   @unique
-  otp           String
-  createdAt     DateTime @default(now())
-  expiresAt     DateTime
+  id        Int      @id @default(autoincrement())
+  aadhaar   String
+  mobile    String
+  otpHash   String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+
+  @@unique([aadhaar, mobile])
+}
+
+model Location {
+  id        Int      @id @default(autoincrement())
+  tourist   Tourist  @relation(fields: [touristId], references: [id])
+  touristId Int
+  latitude  Float
+  longitude Float
+  accuracy  Float?
+  speed     Float?
+  heading   Float?
+  battery   Float?
+  timestamp DateTime @default(now())
 }

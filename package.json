@@ -14,15 +14,18 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@fastify/cors": "^11.1.0",
     "@prisma/client": "^6.15.0",
     "bullmq": "^5.58.4",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "fastify": "^4.29.1",
+    "fastify-socket.io": "^5.1.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.7.0",
     "morgan": "^1.10.1",
-    "redis": "^5.8.2"
+    "socket.io": "^4.8.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10",

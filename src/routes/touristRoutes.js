@@ -1,13 +1,8 @@
-// src/routes/touristRoutes.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const ctrl = require('../controllers/touristController');
+const { sendOtp, verifyOtpAndRegister } = require("../controllers/touristcontroller");
 
-// Mock OTP send/verify for emergency contact
-router.post('/send-otp', ctrl.sendOtp);
-router.post('/verify-otp', ctrl.verifyOtp);
-
-// Registration endpoint
-router.post('/register', ctrl.registerTourist);
+router.post("/send-otp", sendOtp);
+router.post("/verify-otp", verifyOtpAndRegister);
 
 module.exports = router;

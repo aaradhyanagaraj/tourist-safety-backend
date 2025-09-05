@@ -2,238 +2,183 @@
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 const {
-  getKek,
   generateDek,
-  encryptPayloadWithDek,
-  wrapDekWithKek,
-  sha256Hex,
-} = require("../utils/crypto");
+  encryptWithDek,
+  wrapDek,
+  hashValue,
+  encryptMobile,
+} = require("../utils/encryption");
+const { generateOtp } = require("../utils/otp");
+const crypto = require("crypto");
 
-const redisClientPromise = require("../utils/redis"); // ✅ Import Redis client
+// In-memory OTP store (replace with DB/Redis in production)
+const otpStore = {}; 
+// { mobile: { otp, expiresAt, type, aadhaar?, visaId? } }
 
-/* ----------------------- Helpers ----------------------- */
-function hashNormalizedAadhaar(aadhaar) {
-  return sha256Hex(aadhaar.trim());
-}
-
-function phoneHash(phone) {
-  return sha256Hex(phone.trim());
-}
-
-/* ------------------ OTP endpoints ------------------ */
+// ===============================
+// 1. Send OTP
+// ===============================
 exports.sendOtp = async (req, res) => {
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: "phone required" });
-
-    if (!/^\+?\d{7,15}$/.test(phone))
-      return res.status(400).json({ error: "invalid phone format" });
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min expiry
-    const pHash = phoneHash(phone);
-
-    // ✅ Save OTP in Redis
-    const redisClient = await redisClientPromise;
-    await redisClient.setEx(pHash, 300, otp);
-
-    // Optional DB persistence
-    try {
-      await prisma.oTPVerification.upsert({
-        where: { phoneHash: pHash },
-        update: { otp, expiresAt },
-        create: { phoneHash: pHash, otp, expiresAt },
-      });
-    } catch (e) {
-      console.warn("DB persistence failed:", e.message);
+    const { mobile, type, aadhaar, visaId } = req.body;
+    if (!mobile || !type) {
+      return res.status(400).json({ error: "Mobile and type are required" });
+    }
+    if (type === "INDIAN" && !/^\d{12}$/.test(aadhaar || "")) {
+      return res.status(400).json({ error: "Invalid or missing Aadhaar (12 digits)" });
+    }
+    if (type === "FOREIGNER" && !visaId) {
+      return res.status(400).json({ error: "Visa ID is required for foreigner" });
     }
 
-    console.log(`📩 OTP for ${phone}: ${otp} (expires ${expiresAt.toISOString()})`);
+    const otp = generateOtp();
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+    otpStore[mobile] = { otp, expiresAt, type, aadhaar, visaId };
 
-    return res.json({
-      success: true,
-      message: "OTP sent (mock). Check server console.",
-    });
+    console.log(`📲 OTP for ${mobile}: ${otp}`);
+    res.json({ message: "OTP sent successfully" });
   } catch (err) {
-    console.error("sendOtp ERR:", err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to send OTP", details: err.message });
   }
 };
 
-exports.verifyOtp = async (req, res) => {
+// ===============================
+// 2. Verify OTP + Register Tourist
+// ===============================
+exports.verifyOtpAndRegister = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) {
-      return res.status(400).json({ error: "phone and otp required" });
+    const {
+      mobile,
+      otp,
+      type,        // "INDIAN" | "FOREIGNER"
+      aadhaar,     // for INDIAN
+      visaId,      // for FOREIGNER
+      name,
+      age,
+      gender,
+      address,
+      emergencyContact,
+      travelStart,
+      travelEnd,
+      consent,
+    } = req.body;
+
+    // 1. Validate OTP
+    const record = otpStore[mobile];
+    if (!record || record.otp !== otp || record.expiresAt < Date.now()) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+    if (record.type !== type) {
+      return res.status(400).json({ error: "Type does not match OTP session" });
+    }
+    if (type === "INDIAN" && record.aadhaar !== aadhaar) {
+      return res.status(400).json({ error: "Aadhaar does not match OTP session" });
+    }
+    if (type === "FOREIGNER" && record.visaId !== visaId) {
+      return res.status(400).json({ error: "Visa ID does not match OTP session" });
+    }
+    delete otpStore[mobile]; // OTP one-time use
+
+    // 2. Hash Aadhaar/Visa
+    let aadhaarHash = null;
+    let visaIdHash = null;
+    if (type === "INDIAN") {
+      aadhaarHash = hashValue(aadhaar);
+    } else if (type === "FOREIGNER") {
+      visaIdHash = hashValue(visaId);
     }
 
-    const pHash = phoneHash(phone);
-    const redisClient = await redisClientPromise;
-    const storedOtp = await redisClient.get(pHash);
-
-    if (!storedOtp) {
-      return res.status(400).json({ error: "otp not requested or expired" });
-    }
-
-    if (storedOtp !== otp) {
-      return res.status(400).json({ error: "invalid otp" });
-    }
-
-    // ✅ OTP is correct → delete from Redis
-    await redisClient.del(pHash);
-
-    return res.json({ success: true, message: "OTP verified" });
-  } catch (err) {
-    console.error("verifyOtp ERR:", err);
-    return res.status(500).json({ error: err.message });
-  }
-};
-
-/* ------------------ Registration endpoint ------------------ */
-exports.registerTourist = async (req, res) => {
-  try {
-    const payload = req.body;
-
-    // Step 1: Basic validations
-    if (!payload.type || !["INDIAN", "FOREIGN"].includes(payload.type))
-      return res.status(400).json({ error: "type must be INDIAN or FOREIGN" });
-
-    if (!payload.name || payload.name.trim().length < 2)
-      return res.status(400).json({ error: "name required" });
-
-    if (!payload.consent) return res.status(400).json({ error: "consent required" });
-    if (!payload.travelFrom || !payload.travelTo)
-      return res.status(400).json({ error: "travelFrom and travelTo required" });
-
-    const travelFrom = new Date(payload.travelFrom);
-    const travelTo = new Date(payload.travelTo);
-    if (isNaN(travelFrom) || isNaN(travelTo) || travelFrom > travelTo)
-      return res.status(400).json({ error: "invalid travel dates" });
-
-    // Step 2: Aadhaar / Passport validation + duplicate prevention
-    let uniqueHash = null;
-
-    if (payload.type === "INDIAN") {
-      const aadhaar = (payload.aadhaar || "").trim();
-      if (!/^\d{12}$/.test(aadhaar))
-        return res.status(400).json({ error: "aadhaar must be 12 digits" });
-
-      uniqueHash = hashNormalizedAadhaar(aadhaar);
-
-      const duplicate = await prisma.tourist.findFirst({
-        where: {
-          aadhaarHash: uniqueHash,
-          AND: [
-            { travelFrom: { lte: travelTo } },
-            { travelTo: { gte: travelFrom } },
-          ],
-        },
+    // 3. Business Rules: Prevent duplicates
+    if (aadhaarHash) {
+      const existingByAadhaar = await prisma.tourist.findFirst({
+        where: { aadhaarHash },
       });
-      if (duplicate)
-        return res.status(409).json({
-          error: "Tourist with same Aadhaar already registered for overlapping dates",
-        });
-    } else {
-      const passport = (payload.passport || "").trim();
-      if (!/^[A-Z0-9\-]{5,20}$/i.test(passport))
-        return res.status(400).json({ error: "invalid passport number format" });
-
-      uniqueHash = sha256Hex(passport);
-      const duplicate = await prisma.tourist.findFirst({
-        where: {
-          aadhaarHash: uniqueHash,
-          AND: [
-            { travelFrom: { lte: travelTo } },
-            { travelTo: { gte: travelFrom } },
-          ],
-        },
-      });
-      if (duplicate)
-        return res.status(409).json({
-          error: "Tourist with same passport already registered for overlapping dates",
-        });
-    }
-
-    // Step 3: OTP verification for mobile
-    if (payload.mobile) {
-      if (!payload.otp)
-        return res.status(400).json({ error: "OTP required for mobile verification" });
-
-      const pHash = phoneHash(payload.mobile);
-      const redisClient = await redisClientPromise;
-      const storedOtp = await redisClient.get(pHash);
-
-      if (!storedOtp || storedOtp !== payload.otp) {
-        return res.status(400).json({ error: "Invalid or expired OTP for mobile" });
+      if (existingByAadhaar) {
+        return res.status(400).json({ error: "This Aadhaar is already registered" });
       }
-
-      // ✅ OTP valid → delete it
-      await redisClient.del(pHash);
+    }
+    if (visaIdHash) {
+      const existingByVisa = await prisma.tourist.findFirst({
+        where: { visaIdHash },
+      });
+      if (existingByVisa) {
+        return res.status(400).json({ error: "This Visa ID is already registered" });
+      }
     }
 
-    // Step 4: Build PII object
-    const piiObject = {
-      type: payload.type,
-      name: payload.name,
-      aadhaar: payload.type === "INDIAN" ? payload.aadhaar : null,
-      passport: payload.type === "FOREIGN" ? payload.passport : null,
-      email: payload.email || null,
-      mobile: payload.mobile || null,
-      emergencyContact: payload.emergencyContact || null,
-      age: payload.age || null,
-      gender: payload.gender || null,
-      accommodation: payload.accommodation || null,
+    // 4. Encrypt mobile separately
+    const { encryptedMobile, mobileNonce, mobileTag } = encryptMobile(mobile);
+
+    // Check duplicate mobile for overlapping trip
+    const overlappingMobile = await prisma.tourist.findFirst({
+      where: {
+        mobile: encryptedMobile,
+        // Overlapping trip check
+        AND: [
+          {
+            travelStart: { lte: new Date(travelEnd) },
+            travelEnd: { gte: new Date(travelStart) },
+          },
+        ],
+      },
+    });
+    if (overlappingMobile) {
+      return res.status(400).json({ error: "This mobile number is already registered for an overlapping trip" });
+    }
+
+    // 5. Build payload to encrypt
+    const payload = {
+      name,
+      age,
+      gender,
+      address,
+      emergencyContact,
+      travelStart,
+      travelEnd,
+      consent,
+      mobile,
     };
 
-    // Step 5: Encryption
+    // 6. Generate DEK + Encrypt payload
     const dek = generateDek();
-    const enc = encryptPayloadWithDek(dek, piiObject);
-    const kek = getKek();
-    const wrapped = wrapDekWithKek(kek, dek);
+    const { encrypted, nonce, tag } = encryptWithDek(payload, dek);
+    const { wrappedDek, wrappedDekNonce, wrappedDekTag } = wrapDek(dek);
 
-    // Step 6: Audit hash
-    const auditInput = Buffer.concat([
-      Buffer.from(enc.ciphertextB64, "base64"),
-      Buffer.from(enc.ivB64, "base64"),
-      Buffer.from(enc.tagB64, "base64"),
-      Buffer.from(uniqueHash, "utf8"),
-    ]);
-    const auditHash = sha256Hex(auditInput);
+    // 7. Generate public touristId
+    const touristId = crypto.randomBytes(6).toString("hex");
 
-    // Step 7: Save Tourist
-    const created = await prisma.tourist.create({
+    // 8. Persist in DB
+    await prisma.tourist.create({
       data: {
-        aadhaarHash: uniqueHash,
-        encryptedPayload: enc.ciphertextB64,
-        payloadNonce: enc.ivB64,
-        payloadTag: enc.tagB64,
-        wrappedDek: wrapped.wrappedB64,
-        wrappedDekNonce: wrapped.ivB64,
-        wrappedDekTag: wrapped.tagB64,
-        travelFrom,
-        travelTo,
-        consent: !!payload.consent,
-        type: payload.type,
+        touristId,
+        type,
+        aadhaarHash,
+        visaIdHash,
+        mobile: encryptedMobile,
+        mobileNonce,
+        mobileTag,
+        encryptedPayload: encrypted,
+        payloadNonce: nonce,
+        payloadTag: tag,
+        wrappedDek,
+        wrappedDekNonce,
+        wrappedDekTag,
+        name,
+        age,
+        gender,
+        address,
+        emergencyContact,
+        travelStart: new Date(travelStart),
+        travelEnd: new Date(travelEnd),
+        consent,
       },
     });
 
-    const log = await prisma.blockchainLog.create({
-      data: {
-        touristId: created.id,
-        auditHash,
-        status: "PENDING",
-      },
-    });
-
-    return res.status(201).json({
-      success: true,
-      touristId: created.id,
-      blockchainLogId: log.id,
-      auditHash,
-      status: log.status,
+    res.status(201).json({
+      message: "Tourist registered successfully",
+      touristId,
     });
   } catch (err) {
-    console.error("registerTourist ERR:", err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Registration failed", details: err.message });
   }
 };
