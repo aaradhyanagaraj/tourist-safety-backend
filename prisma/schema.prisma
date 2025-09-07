@@ -47,7 +47,8 @@ model Tourist {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  locations         Location[]
+  locations_raw     LocationRaw[]
+  latestLocation    LocationLatest? 
 }
 
 
@@ -63,15 +64,37 @@ model OtpVerification {
   @@unique([aadhaar, mobile])
 }
 
-model Location {
-  id        Int      @id @default(autoincrement())
-  tourist   Tourist  @relation(fields: [touristId], references: [id])
-  touristId Int
-  latitude  Float
-  longitude Float
-  accuracy  Float?
-  speed     Float?
-  heading   Float?
-  battery   Float?
-  timestamp DateTime @default(now())
+model LocationRaw {
+  id          Int       @id @default(autoincrement())
+  touristId   Int
+  timestamp   DateTime  @default(now())
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  speed       Float?
+  heading     Float?
+  provider    String?
+  deviceId    String?
+  batchId     String?
+  createdAt   DateTime  @default(now())
+
+  tourist     Tourist   @relation(fields: [touristId], references: [id], onDelete: Cascade)
+
+  @@index([touristId, timestamp])
+  @@index([timestamp])
+}
+
+model LocationLatest {
+  touristId  Int   @id
+  timestamp   DateTime
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  speed       Float?
+  heading     Float?
+  provider    String?
+  deviceId    String?
+  updatedAt   DateTime @updatedAt
+
+  tourist     Tourist   @relation(fields: [touristId], references: [id], onDelete: Cascade)
 }
